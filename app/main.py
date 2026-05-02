@@ -39,6 +39,7 @@ class ConfigPayload(BaseModel):
     google_drive_client_secret: str = ""
     google_drive_refresh_token: str = ""
     dropbox_access_token: str = ""
+    max_transfer_threads: int = Field(default=5, ge=1, le=64)
 
 
 class ListResponseEntry(BaseModel):
@@ -111,6 +112,7 @@ def get_config() -> dict:
         "google_drive_client_secret": config["google_drive"].get("client_secret", ""),
         "google_drive_refresh_token": config["google_drive"].get("refresh_token", ""),
         "dropbox_access_token": config["dropbox"].get("access_token", ""),
+        "max_transfer_threads": config.get("sync", {}).get("max_threads", 5),
     }
 
 
@@ -125,6 +127,9 @@ def set_config(payload: ConfigPayload) -> dict:
         },
         "dropbox": {
             "access_token": payload.dropbox_access_token.strip(),
+        },
+        "sync": {
+            "max_threads": payload.max_transfer_threads,
         },
     }
     save_config(config)
@@ -315,14 +320,30 @@ def start_copy(payload: StartCopyRequest) -> dict:
         for item in payload.selections
     ]
 
+    max_threads = config.get("sync", {}).get("max_threads", 5)
+    try:
+        max_threads = int(max_threads)
+    except (TypeError, ValueError):
+        max_threads = 5
+    max_threads = max(1, min(max_threads, 64))
+
     state = start_copy_job(
         source=source,
         destination=destination,
         source_parent_id=payload.source_parent_id,
         destination_parent_id=payload.destination_parent_id,
         selections=selections,
+        max_threads=max_threads,
     )
     return {"job_id": state.id}
+
+
+@app.post("/api/copy/{job_id}/cancel")
+def cancel_copy(job_id: str) -> dict:
+    cancelled = registry.cancel(job_id)
+    if not cancelled:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"ok": True}
 
 
 @app.get("/api/copy/{job_id}")
@@ -335,6 +356,11 @@ def copy_status(job_id: str) -> dict:
     if job.total_items > 0:
         percentage = int((job.completed_items / job.total_items) * 100)
 
+    thread_activity = [
+        {"thread": thread_name, "item": item_name}
+        for thread_name, item_name in sorted(job.thread_activity.items())
+    ]
+
     return {
         "job_id": job.id,
         "status": job.status,
@@ -343,6 +369,9 @@ def copy_status(job_id: str) -> dict:
         "total_items": job.total_items,
         "completed_items": job.completed_items,
         "current_item": job.current_item,
+        "cancel_requested": job.cancel_requested,
+        "worker_count": job.worker_count,
+        "thread_activity": thread_activity,
         "percentage": percentage,
     }
 

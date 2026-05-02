@@ -43,3 +43,4 @@ A GUI tool that allows the user to synchronise between cloud storage providers a
 - Shows the user a progress dialog while files are being copied
     - The progress dialog ahould have a cancel button to stop the copy operation
 - The app should allow for multiple concurrent threads where multiple files are being copied. Maximum number of threads should be configurable in the config screen
+- When using multiple threads, the progress dialog shows per-thread activity using worker rows (for example Worker 1, Worker 2) and displays the current file being copied for each worker. Idle workers are shown as idle.

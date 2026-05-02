@@ -293,6 +293,66 @@ textarea {
   overflow: hidden;
 }
 
+.progress-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.thread-activity-wrap {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 8px 10px;
+}
+
+.thread-activity-title {
+  margin: 0 0 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.thread-activity-list {
+  margin: 0;
+  padding-left: 16px;
+  max-height: 130px;
+  overflow: auto;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.76rem;
+}
+
+.progress-state {
+  margin: 0;
+  display: inline-block;
+  width: fit-content;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(19, 36, 42, 0.12);
+  color: var(--ink);
+}
+
+.progress-state.running {
+  background: rgba(255, 179, 93, 0.25);
+}
+
+.progress-state.cancel-requested {
+  background: rgba(224, 97, 59, 0.2);
+}
+
+.progress-state.cancelled {
+  background: rgba(75, 93, 101, 0.2);
+}
+
+.progress-state.completed {
+  background: rgba(52, 168, 83, 0.2);
+}
+
+.progress-state.failed {
+  background: rgba(191, 41, 41, 0.2);
+}
+
 .progress-bar {
   height: 100%;
   width: 0;

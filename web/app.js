@@ -40,15 +40,56 @@ const ui = {
   googleOauthStart: document.getElementById("google-oauth-start"),
   configForm: document.getElementById("config-form"),
   progressDialog: document.getElementById("progress-dialog"),
+  progressState: document.getElementById("progress-state"),
   progressText: document.getElementById("progress-text"),
   progressBar: document.getElementById("progress-bar"),
+  threadActivityWrap: document.getElementById("thread-activity-wrap"),
+  threadActivityList: document.getElementById("thread-activity-list"),
+  cancelCopy: document.getElementById("cancel-copy"),
   template: document.getElementById("entry-template"),
   gdServiceAccountJson: document.getElementById("gd-service-account-json"),
   gdClientId: document.getElementById("gd-client-id"),
   gdClientSecret: document.getElementById("gd-client-secret"),
   gdRefreshToken: document.getElementById("gd-refresh-token"),
   dbAccessToken: document.getElementById("db-access-token"),
+  maxTransferThreads: document.getElementById("max-transfer-threads"),
 };
+
+let activeJobId = null;
+
+function setProgressState(kind, text) {
+  ui.progressState.className = `progress-state ${kind}`;
+  ui.progressState.textContent = text;
+}
+
+function renderThreadActivity(status) {
+  const workers = Number(status.worker_count || 1);
+  const activity = Array.isArray(status.thread_activity) ? status.thread_activity : [];
+
+  if (workers <= 1) {
+    ui.threadActivityWrap.hidden = true;
+    ui.threadActivityList.innerHTML = "";
+    return;
+  }
+
+  ui.threadActivityWrap.hidden = false;
+  ui.threadActivityList.innerHTML = "";
+
+  if (activity.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "Waiting for worker activity...";
+    ui.threadActivityList.appendChild(li);
+    return;
+  }
+
+  for (const row of activity) {
+    const li = document.createElement("li");
+    const thread = row.thread || "worker";
+    const item = row.item || "idle";
+    li.textContent = `${thread}: ${item}`;
+    ui.threadActivityList.appendChild(li);
+  }
+}
 
 function showError(message) {
   window.alert(message);
@@ -236,10 +277,28 @@ async function startCopy() {
     body: JSON.stringify(payload),
   });
 
+  activeJobId = result.job_id;
+  setProgressState("running", "Running");
   ui.progressText.textContent = "Copy started";
   ui.progressBar.style.width = "0%";
+  ui.threadActivityWrap.hidden = true;
+  ui.threadActivityList.innerHTML = "";
+  ui.cancelCopy.disabled = false;
+  ui.cancelCopy.textContent = "Cancel";
   ui.progressDialog.showModal();
   pollJob(result.job_id);
+}
+
+async function cancelCopy() {
+  if (!activeJobId) {
+    return;
+  }
+  ui.cancelCopy.disabled = true;
+  ui.cancelCopy.textContent = "Cancelling...";
+  setProgressState("cancel-requested", "Cancel Requested");
+  await api(`/api/copy/${encodeURIComponent(activeJobId)}/cancel`, {
+    method: "POST",
+  });
 }
 
 async function pollJob(jobId) {
@@ -247,11 +306,26 @@ async function pollJob(jobId) {
     try {
       const status = await api(`/api/copy/${encodeURIComponent(jobId)}`);
       ui.progressBar.style.width = `${status.percentage}%`;
+      renderThreadActivity(status);
       ui.progressText.textContent = `${status.status.toUpperCase()} - ${status.completed_items}/${status.total_items} ${
         status.current_item ? `| ${status.current_item}` : ""
       }`;
 
+      if (status.status === "cancelled") {
+        setProgressState("cancelled", "Cancelled");
+      } else if (status.status === "completed") {
+        setProgressState("completed", "Completed");
+      } else if (status.status === "failed") {
+        setProgressState("failed", "Failed");
+      } else if (status.cancel_requested) {
+        setProgressState("cancel-requested", "Cancel Requested");
+      } else {
+        setProgressState("running", "Running");
+      }
+
       if (status.status === "completed" || status.status === "failed") {
+        activeJobId = null;
+        ui.cancelCopy.disabled = true;
         clearInterval(timer);
         setTimeout(() => ui.progressDialog.close(), 500);
         if (status.status === "failed") {
@@ -260,8 +334,18 @@ async function pollJob(jobId) {
         state.source.selected.clear();
         await loadPane("source");
         await loadPane("destination");
+      } else if (status.status === "cancelled") {
+        activeJobId = null;
+        ui.cancelCopy.disabled = true;
+        clearInterval(timer);
+        setTimeout(() => ui.progressDialog.close(), 500);
+        state.source.selected.clear();
+        await loadPane("source");
+        await loadPane("destination");
       }
     } catch (err) {
+      activeJobId = null;
+      ui.cancelCopy.disabled = true;
       clearInterval(timer);
       ui.progressDialog.close();
       showError(err.message);
@@ -276,6 +360,7 @@ async function loadConfig() {
   ui.gdClientSecret.value = cfg.google_drive_client_secret || "";
   ui.gdRefreshToken.value = cfg.google_drive_refresh_token || "";
   ui.dbAccessToken.value = cfg.dropbox_access_token || "";
+  ui.maxTransferThreads.value = cfg.max_transfer_threads || 5;
 }
 
 async function saveConfig(event) {
@@ -289,6 +374,7 @@ async function saveConfig(event) {
       google_drive_client_secret: ui.gdClientSecret.value,
       google_drive_refresh_token: ui.gdRefreshToken.value,
       dropbox_access_token: ui.dbAccessToken.value,
+      max_transfer_threads: Number(ui.maxTransferThreads.value || 5),
     }),
   });
 
@@ -352,6 +438,7 @@ function wireEvents() {
   });
 
   ui.saveConfig.addEventListener("click", saveConfig);
+  ui.cancelCopy.addEventListener("click", () => cancelCopy().catch((err) => showError(err.message)));
   ui.googleOauthStart.addEventListener("click", () =>
     startGoogleOAuth().catch((err) => showError(err.message))
   );

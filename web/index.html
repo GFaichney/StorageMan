@@ -99,6 +99,10 @@
           Dropbox Access Token
           <input type="password" id="db-access-token" />
         </label>
+        <label>
+          Max Transfer Threads
+          <input type="number" id="max-transfer-threads" min="1" max="64" value="5" />
+        </label>
 
         <footer>
           <button class="btn btn-outline" value="cancel">Cancel</button>
@@ -110,9 +114,17 @@
     <dialog id="progress-dialog" class="modal modal-progress">
       <div>
         <h3>Copying Files</h3>
+        <p id="progress-state" class="progress-state">Running</p>
         <p id="progress-text">Preparing...</p>
         <div class="progress-track">
           <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        <div id="thread-activity-wrap" class="thread-activity-wrap" hidden>
+          <p class="thread-activity-title">Thread Activity</p>
+          <ul id="thread-activity-list" class="thread-activity-list"></ul>
+        </div>
+        <div class="progress-actions">
+          <button id="cancel-copy" class="btn btn-outline" type="button">Cancel</button>
         </div>
       </div>
     </dialog>

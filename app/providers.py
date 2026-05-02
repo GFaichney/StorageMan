@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -244,6 +245,8 @@ class GoogleDriveProvider(StorageProvider):
             refresh_token=refresh_token,
         )
         self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        # googleapiclient/httplib transport is not safe to share across concurrent threads.
+        self._api_lock = threading.Lock()
 
     def _build_credentials(
         self,
@@ -292,17 +295,18 @@ class GoogleDriveProvider(StorageProvider):
         parent = self._parent(parent_id)
         query = f"'{parent}' in parents and trashed=false"
         try:
-            result = (
-                self.service.files()
-                .list(
-                    q=query,
-                    fields="files(id,name,mimeType,size)",
-                    pageSize=1000,
-                    supportsAllDrives=True,
-                    includeItemsFromAllDrives=True,
+            with self._api_lock:
+                result = (
+                    self.service.files()
+                    .list(
+                        q=query,
+                        fields="files(id,name,mimeType,size)",
+                        pageSize=1000,
+                        supportsAllDrives=True,
+                        includeItemsFromAllDrives=True,
+                    )
+                    .execute()
                 )
-                .execute()
-            )
         except HttpError as ex:
             raise ProviderError(f"Failed to list Google Drive folder: {ex}") from ex
 
@@ -326,24 +330,26 @@ class GoogleDriveProvider(StorageProvider):
             "parents": [parent],
         }
         try:
-            created = (
-                self.service.files()
-                .create(body=body, fields="id,name,mimeType", supportsAllDrives=True)
-                .execute()
-            )
+            with self._api_lock:
+                created = (
+                    self.service.files()
+                    .create(body=body, fields="id,name,mimeType", supportsAllDrives=True)
+                    .execute()
+                )
         except HttpError as ex:
             raise ProviderError(f"Failed to create Google Drive folder: {ex}") from ex
         return Entry(id=created["id"], name=created["name"], is_folder=True)
 
     def download_file(self, entry_id: str) -> FileContent:
         meta = self.get_entry(entry_id)
-        request = self.service.files().get_media(fileId=entry_id, supportsAllDrives=True)
         fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
         try:
-            while not done:
-                _, done = downloader.next_chunk()
+            with self._api_lock:
+                request = self.service.files().get_media(fileId=entry_id, supportsAllDrives=True)
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
         except HttpError as ex:
             raise ProviderError(f"Failed to download Google Drive file: {ex}") from ex
         return FileContent(name=meta.name, data=fh.getvalue())
@@ -356,11 +362,12 @@ class GoogleDriveProvider(StorageProvider):
             "parents": [parent],
         }
         try:
-            created = (
-                self.service.files()
-                .create(body=body, media_body=media, fields="id,name,size", supportsAllDrives=True)
-                .execute()
-            )
+            with self._api_lock:
+                created = (
+                    self.service.files()
+                    .create(body=body, media_body=media, fields="id,name,size", supportsAllDrives=True)
+                    .execute()
+                )
         except HttpError as ex:
             raise ProviderError(f"Failed to upload Google Drive file: {ex}") from ex
         size = int(created.get("size", len(data))) if created.get("size") else len(data)
@@ -368,11 +375,12 @@ class GoogleDriveProvider(StorageProvider):
 
     def get_entry(self, entry_id: str) -> Entry:
         try:
-            metadata = (
-                self.service.files()
-                .get(fileId=entry_id, fields="id,name,mimeType,size", supportsAllDrives=True)
-                .execute()
-            )
+            with self._api_lock:
+                metadata = (
+                    self.service.files()
+                    .get(fileId=entry_id, fields="id,name,mimeType,size", supportsAllDrives=True)
+                    .execute()
+                )
         except HttpError as ex:
             raise ProviderError(f"Failed to read Google Drive metadata: {ex}") from ex
 

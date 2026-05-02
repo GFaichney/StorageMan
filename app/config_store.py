@@ -16,6 +16,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "dropbox": {
         "access_token": "",
     },
+    "sync": {
+        "max_threads": 5,
+    },
 }
 
 
