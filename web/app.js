@@ -37,11 +37,13 @@ const ui = {
   configDialog: document.getElementById("config-dialog"),
   openConfig: document.getElementById("open-config"),
   saveConfig: document.getElementById("save-config"),
+  googleOauthStart: document.getElementById("google-oauth-start"),
   configForm: document.getElementById("config-form"),
   progressDialog: document.getElementById("progress-dialog"),
   progressText: document.getElementById("progress-text"),
   progressBar: document.getElementById("progress-bar"),
   template: document.getElementById("entry-template"),
+  gdServiceAccountJson: document.getElementById("gd-service-account-json"),
   gdClientId: document.getElementById("gd-client-id"),
   gdClientSecret: document.getElementById("gd-client-secret"),
   gdRefreshToken: document.getElementById("gd-refresh-token"),
@@ -269,6 +271,7 @@ async function pollJob(jobId) {
 
 async function loadConfig() {
   const cfg = await api("/api/config");
+  ui.gdServiceAccountJson.value = cfg.google_drive_service_account_json || "";
   ui.gdClientId.value = cfg.google_drive_client_id || "";
   ui.gdClientSecret.value = cfg.google_drive_client_secret || "";
   ui.gdRefreshToken.value = cfg.google_drive_refresh_token || "";
@@ -281,6 +284,7 @@ async function saveConfig(event) {
   await api("/api/config", {
     method: "POST",
     body: JSON.stringify({
+      google_drive_service_account_json: ui.gdServiceAccountJson.value,
       google_drive_client_id: ui.gdClientId.value,
       google_drive_client_secret: ui.gdClientSecret.value,
       google_drive_refresh_token: ui.gdRefreshToken.value,
@@ -289,6 +293,36 @@ async function saveConfig(event) {
   });
 
   ui.configDialog.close();
+}
+
+async function startGoogleOAuth() {
+  const payload = {
+    google_drive_service_account_json: ui.gdServiceAccountJson.value,
+    google_drive_client_id: ui.gdClientId.value,
+    google_drive_client_secret: ui.gdClientSecret.value,
+    google_drive_refresh_token: ui.gdRefreshToken.value,
+    dropbox_access_token: ui.dbAccessToken.value,
+  };
+
+  const result = await api("/api/google/oauth/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  const popup = window.open(result.authorization_url, "google-oauth", "width=720,height=780");
+  if (!popup) {
+    throw new Error("Popup was blocked. Allow popups for this site and try again.");
+  }
+
+  const timer = setInterval(async () => {
+    if (!popup.closed) {
+      return;
+    }
+
+    clearInterval(timer);
+    await loadConfig();
+    window.alert("Google OAuth finished. The refresh token has been loaded into the form.");
+  }, 800);
 }
 
 function wireEvents() {
@@ -318,6 +352,9 @@ function wireEvents() {
   });
 
   ui.saveConfig.addEventListener("click", saveConfig);
+  ui.googleOauthStart.addEventListener("click", () =>
+    startGoogleOAuth().catch((err) => showError(err.message))
+  );
 }
 
 async function init() {

@@ -33,6 +33,9 @@ These scripts install dependencies and start the app. For Linux/macOS, make the 
 
 ## Notes
 
-- Google Drive uses OAuth desktop credentials (`client_id`, `client_secret`).
+- Google Drive does not support browsing user files with a single API key.
+- For single-credential Google Drive access, use a service account JSON key in the config dialog and share the target Drive folders with that service account email.
+- OAuth desktop credentials are also supported. You can either enter `client_id`, `client_secret`, and `refresh_token` manually, or paste the Google OAuth client JSON and provide only the `refresh_token` separately.
+- The config dialog now includes a built-in `Generate Google Refresh Token` flow. Paste OAuth client JSON or enter client ID and secret, run the flow, complete Google consent, and the app will save the refresh token automatically.
 - Dropbox uses an access token.
 - Configuration is stored in `config.json` in the project root.

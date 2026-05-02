@@ -72,6 +72,14 @@
         </header>
 
         <label>
+          Google Drive Service Account JSON
+          <textarea id="gd-service-account-json" rows="8" placeholder="Paste either a service account JSON key or an OAuth client JSON file here"></textarea>
+        </label>
+        <p class="config-hint">
+          Google Drive cannot browse user files with a simple API key. This field accepts either a service account JSON key, or an OAuth client JSON file with top-level installed/web credentials.
+        </p>
+
+        <label>
           Google Drive Client ID
           <input type="text" id="gd-client-id" />
         </label>
@@ -83,6 +91,10 @@
           Google Drive Refresh Token
           <input type="password" id="gd-refresh-token" />
         </label>
+        <p class="config-hint">If you paste OAuth client JSON above, only the refresh token is still required here. Leave all OAuth fields empty when using a service account.</p>
+        <button type="button" id="google-oauth-start" class="btn btn-small btn-outline">
+          Generate Google Refresh Token
+        </button>
         <label>
           Dropbox Access Token
           <input type="password" id="db-access-token" />

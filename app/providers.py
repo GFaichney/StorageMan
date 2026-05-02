@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 from pathlib import Path
 from typing import Iterable
@@ -8,6 +9,7 @@ from typing import Iterable
 import dropbox
 from dropbox.exceptions import ApiError
 from dropbox.files import FileMetadata, FolderMetadata
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -17,10 +19,47 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from app.models import Entry, FileContent, ProviderType
 
 GOOGLE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
+GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
 class ProviderError(RuntimeError):
     pass
+
+
+def extract_google_oauth_client_credentials(
+    credentials_json: str,
+    client_id: str = "",
+    client_secret: str = "",
+) -> tuple[str, str]:
+    if not credentials_json.strip():
+        return client_id.strip(), client_secret.strip()
+
+    try:
+        info = json.loads(credentials_json)
+    except json.JSONDecodeError as ex:
+        raise ProviderError("Google credentials JSON is invalid") from ex
+
+    oauth_block = info.get("installed") or info.get("web")
+    if not isinstance(oauth_block, dict):
+        return client_id.strip(), client_secret.strip()
+
+    return (
+        oauth_block.get("client_id", client_id).strip(),
+        oauth_block.get("client_secret", client_secret).strip(),
+    )
+
+
+def is_google_service_account_json(credentials_json: str) -> bool:
+    if not credentials_json.strip():
+        return False
+
+    try:
+        info = json.loads(credentials_json)
+    except json.JSONDecodeError as ex:
+        raise ProviderError("Google credentials JSON is invalid") from ex
+
+    return info.get("type") == "service_account"
 
 
 class StorageProvider:
@@ -191,20 +230,60 @@ class DropboxProvider(StorageProvider):
 class GoogleDriveProvider(StorageProvider):
     provider_type: ProviderType = "gdrive"
 
-    def __init__(self, client_id: str, client_secret: str, refresh_token: str) -> None:
+    def __init__(
+        self,
+        service_account_json: str,
+        client_id: str,
+        client_secret: str,
+        refresh_token: str,
+    ) -> None:
+        creds = self._build_credentials(
+            service_account_json=service_account_json,
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+        )
+        self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+    def _build_credentials(
+        self,
+        service_account_json: str,
+        client_id: str,
+        client_secret: str,
+        refresh_token: str,
+    ):
+        if service_account_json.strip():
+            try:
+                info = json.loads(service_account_json)
+                if info.get("type") == "service_account":
+                    return service_account.Credentials.from_service_account_info(
+                        info,
+                        scopes=GOOGLE_SCOPES,
+                    )
+
+                client_id, client_secret = extract_google_oauth_client_credentials(
+                    service_account_json,
+                    client_id,
+                    client_secret,
+                )
+            except (json.JSONDecodeError, ValueError) as ex:
+                raise ProviderError("Google credentials JSON is invalid") from ex
+
         if not client_id or not client_secret or not refresh_token:
-            raise ProviderError("Google Drive credentials are incomplete")
+            raise ProviderError(
+                "Google Drive requires either service account JSON, or OAuth client JSON plus a refresh token"
+            )
 
         creds = Credentials(
             token=None,
             refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
+            token_uri=GOOGLE_TOKEN_URI,
             client_id=client_id,
             client_secret=client_secret,
             scopes=GOOGLE_SCOPES,
         )
         creds.refresh(Request())
-        self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        return creds
 
     def _parent(self, parent_id: str | None) -> str:
         return parent_id or "root"
@@ -310,6 +389,7 @@ def build_provider(provider: ProviderType, config: dict) -> StorageProvider:
     if provider == "gdrive":
         gd = config.get("google_drive", {})
         return GoogleDriveProvider(
+            service_account_json=gd.get("service_account_json", ""),
             client_id=gd.get("client_id", ""),
             client_secret=gd.get("client_secret", ""),
             refresh_token=gd.get("refresh_token", ""),

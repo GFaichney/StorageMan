@@ -1,26 +1,40 @@
 from __future__ import annotations
 
+import os
+import secrets
+import time
 from pathlib import Path
 from typing import Literal
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from google_auth_oauthlib.flow import Flow
 from pydantic import BaseModel, Field
 
 from app.config_store import load_config, save_config
 from app.models import CopySelection, ProviderType
-from app.providers import ProviderError, build_provider
+from app.providers import (
+    GOOGLE_AUTH_URI,
+    GOOGLE_SCOPES,
+    GOOGLE_TOKEN_URI,
+    ProviderError,
+    build_provider,
+    extract_google_oauth_client_credentials,
+    is_google_service_account_json,
+)
 from app.sync_jobs import registry, start_copy_job
 
 app = FastAPI(title="StorageMan")
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+GOOGLE_OAUTH_SESSIONS: dict[str, dict] = {}
 
 
 class ConfigPayload(BaseModel):
+    google_drive_service_account_json: str = ""
     google_drive_client_id: str = ""
     google_drive_client_secret: str = ""
     google_drive_refresh_token: str = ""
@@ -54,6 +68,35 @@ class StartCopyRequest(BaseModel):
     selections: list[CopyItem]
 
 
+class GoogleOAuthStartRequest(ConfigPayload):
+    pass
+
+
+def _build_google_oauth_client_config(client_id: str, client_secret: str, redirect_uri: str) -> dict:
+    return {
+        "installed": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": GOOGLE_AUTH_URI,
+            "token_uri": GOOGLE_TOKEN_URI,
+            "redirect_uris": [redirect_uri],
+        }
+    }
+
+
+def _cleanup_google_oauth_sessions() -> None:
+    cutoff = time.time() - 900
+    expired = [key for key, value in GOOGLE_OAUTH_SESSIONS.items() if value.get("created_at", 0) < cutoff]
+    for key in expired:
+        GOOGLE_OAUTH_SESSIONS.pop(key, None)
+
+
+def _allow_insecure_google_oauth_for_localhost(base_url: str) -> None:
+    # OAuthlib enforces HTTPS by default; localhost desktop flows commonly use HTTP callbacks.
+    if base_url.startswith("http://127.0.0.1") or base_url.startswith("http://localhost"):
+        os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
+
 @app.get("/")
 def root() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -63,6 +106,7 @@ def root() -> FileResponse:
 def get_config() -> dict:
     config = load_config()
     return {
+        "google_drive_service_account_json": config["google_drive"].get("service_account_json", ""),
         "google_drive_client_id": config["google_drive"].get("client_id", ""),
         "google_drive_client_secret": config["google_drive"].get("client_secret", ""),
         "google_drive_refresh_token": config["google_drive"].get("refresh_token", ""),
@@ -74,6 +118,7 @@ def get_config() -> dict:
 def set_config(payload: ConfigPayload) -> dict:
     config = {
         "google_drive": {
+            "service_account_json": payload.google_drive_service_account_json.strip(),
             "client_id": payload.google_drive_client_id.strip(),
             "client_secret": payload.google_drive_client_secret.strip(),
             "refresh_token": payload.google_drive_refresh_token.strip(),
@@ -84,6 +129,133 @@ def set_config(payload: ConfigPayload) -> dict:
     }
     save_config(config)
     return {"ok": True}
+
+
+@app.post("/api/google/oauth/start")
+def start_google_oauth(payload: GoogleOAuthStartRequest, request: Request) -> dict:
+    _cleanup_google_oauth_sessions()
+    _allow_insecure_google_oauth_for_localhost(str(request.base_url).rstrip("/"))
+
+    credentials_json = payload.google_drive_service_account_json.strip()
+    if credentials_json and is_google_service_account_json(credentials_json):
+        raise HTTPException(
+            status_code=400,
+            detail="Service account JSON does not need OAuth. Paste OAuth client JSON here or enter a client ID and client secret.",
+        )
+
+    try:
+        client_id, client_secret = extract_google_oauth_client_credentials(
+            credentials_json,
+            payload.google_drive_client_id,
+            payload.google_drive_client_secret,
+        )
+    except ProviderError as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=400,
+            detail="Google OAuth requires either OAuth client JSON or both client ID and client secret.",
+        )
+
+    redirect_uri = f"{str(request.base_url).rstrip('/')}/api/google/oauth/callback"
+    state = secrets.token_urlsafe(24)
+    flow = Flow.from_client_config(
+        _build_google_oauth_client_config(client_id, client_secret, redirect_uri),
+        scopes=GOOGLE_SCOPES,
+        state=state,
+    )
+    flow.redirect_uri = redirect_uri
+    authorization_url, _ = flow.authorization_url(
+        access_type="offline",
+        prompt="consent",
+        include_granted_scopes="true",
+    )
+
+    GOOGLE_OAUTH_SESSIONS[state] = {
+        "created_at": time.time(),
+        "redirect_uri": redirect_uri,
+        "payload": payload.model_dump(),
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    return {"authorization_url": authorization_url}
+
+
+@app.get("/api/google/oauth/callback")
+def google_oauth_callback(request: Request, state: str | None = None, error: str | None = None) -> HTMLResponse:
+    if error:
+        return HTMLResponse(
+            f"<html><body><h1>Google authorization failed</h1><p>{error}</p></body></html>",
+            status_code=400,
+        )
+
+    if not state:
+        return HTMLResponse(
+            "<html><body><h1>Google authorization failed</h1><p>Missing OAuth state.</p></body></html>",
+            status_code=400,
+        )
+
+    session = GOOGLE_OAUTH_SESSIONS.pop(state, None)
+    if not session:
+        return HTMLResponse(
+            "<html><body><h1>Google authorization failed</h1><p>OAuth session expired or is invalid.</p></body></html>",
+            status_code=400,
+        )
+
+    flow = Flow.from_client_config(
+        _build_google_oauth_client_config(
+            session["client_id"],
+            session["client_secret"],
+            session["redirect_uri"],
+        ),
+        scopes=GOOGLE_SCOPES,
+        state=state,
+    )
+    flow.redirect_uri = session["redirect_uri"]
+
+    try:
+        flow.fetch_token(authorization_response=str(request.url))
+    except Exception as ex:
+        return HTMLResponse(
+            f"<html><body><h1>Google authorization failed</h1><p>{str(ex)}</p></body></html>",
+            status_code=400,
+        )
+
+    refresh_token = flow.credentials.refresh_token
+    if not refresh_token:
+        return HTMLResponse(
+            "<html><body><h1>Google authorization incomplete</h1><p>No refresh token was returned. Re-run the flow and ensure the consent screen is shown.</p></body></html>",
+            status_code=400,
+        )
+
+    pending = session["payload"]
+    config = {
+        "google_drive": {
+            "service_account_json": pending.get("google_drive_service_account_json", "").strip(),
+            "client_id": session["client_id"],
+            "client_secret": session["client_secret"],
+            "refresh_token": refresh_token,
+        },
+        "dropbox": {
+            "access_token": pending.get("dropbox_access_token", "").strip(),
+        },
+    }
+    save_config(config)
+
+    return HTMLResponse(
+        """
+        <html>
+          <body style=\"font-family: sans-serif; padding: 24px;\">
+            <h1>Google Drive connected</h1>
+            <p>The refresh token has been saved to config.json. You can close this window and return to StorageMan.</p>
+            <script>
+              setTimeout(() => window.close(), 1200);
+            </script>
+          </body>
+        </html>
+        """
+    )
 
 
 @app.get("/api/list")

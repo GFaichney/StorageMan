@@ -259,12 +259,24 @@ h3 {
 }
 
 input,
+textarea,
 select {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 8px 10px;
   font: inherit;
   background: white;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 140px;
+}
+
+.config-hint {
+  margin: -2px 0 2px;
+  font-size: 0.82rem;
+  color: var(--muted);
 }
 
 .modal footer {

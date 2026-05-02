@@ -8,6 +8,7 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "google_drive": {
+        "service_account_json": "",
         "client_id": "",
         "client_secret": "",
         "refresh_token": "",
