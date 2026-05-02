@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StorageMan</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="kicker">Storage Sync</p>
+          <h1>StorageMan Synchronisation</h1>
+        </div>
+        <button id="open-config" class="btn btn-outline">Config</button>
+      </header>
+
+      <section class="panels">
+        <article class="panel" id="source-panel">
+          <div class="panel-head">
+            <h2>Source</h2>
+            <select id="source-provider"></select>
+          </div>
+          <div class="path-row">
+            <button id="source-up" class="btn btn-ghost">Up</button>
+            <span id="source-path" class="path-label"></span>
+          </div>
+          <div class="actions-row">
+            <button id="source-refresh" class="btn btn-small">Refresh</button>
+            <button id="source-mkdir" class="btn btn-small">New Folder</button>
+          </div>
+          <div id="source-list" class="entry-list"></div>
+        </article>
+
+        <article class="middle-actions">
+          <button id="copy-btn" class="btn btn-accent">Copy Selected →</button>
+        </article>
+
+        <article class="panel" id="destination-panel">
+          <div class="panel-head">
+            <h2>Destination</h2>
+            <select id="destination-provider"></select>
+          </div>
+          <div class="path-row">
+            <button id="destination-up" class="btn btn-ghost">Up</button>
+            <span id="destination-path" class="path-label"></span>
+          </div>
+          <div class="actions-row">
+            <button id="destination-refresh" class="btn btn-small">Refresh</button>
+            <button id="destination-mkdir" class="btn btn-small">New Folder</button>
+          </div>
+          <div id="destination-list" class="entry-list"></div>
+        </article>
+      </section>
+    </main>
+
+    <dialog id="config-dialog" class="modal">
+      <form method="dialog" id="config-form">
+        <header>
+          <h3>Provider Configuration</h3>
+          <p>Credentials are stored in config.json</p>
+        </header>
+
+        <label>
+          Google Drive Client ID
+          <input type="text" id="gd-client-id" />
+        </label>
+        <label>
+          Google Drive Client Secret
+          <input type="password" id="gd-client-secret" />
+        </label>
+        <label>
+          Google Drive Refresh Token
+          <input type="password" id="gd-refresh-token" />
+        </label>
+        <label>
+          Dropbox Access Token
+          <input type="password" id="db-access-token" />
+        </label>
+
+        <footer>
+          <button class="btn btn-outline" value="cancel">Cancel</button>
+          <button id="save-config" class="btn btn-accent" value="default">Save</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="progress-dialog" class="modal modal-progress">
+      <div>
+        <h3>Copying Files</h3>
+        <p id="progress-text">Preparing...</p>
+        <div class="progress-track">
+          <div id="progress-bar" class="progress-bar"></div>
+        </div>
+      </div>
+    </dialog>
+
+    <template id="entry-template">
+      <div class="entry-row">
+        <label class="entry-select">
+          <input type="checkbox" class="entry-checkbox" />
+        </label>
+        <button class="entry-open"></button>
+        <span class="entry-meta"></span>
+      </div>
+    </template>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
