@@ -11,6 +11,10 @@ Cloud storage synchronization tool with a Python API backend and a web frontend.
 - Multi-select files/folders from a source and copy to a destination
 - Progress-tracked copy jobs with cancellation
 - Per-thread activity details in the progress dialog when concurrent copy threads are enabled
+- Filesystem-backed copy state tracking for pending and copied files
+- Resume failed or cancelled copy jobs
+- On application startup, detect interrupted copy jobs and offer to resume
+- Post-copy verification of destination presence with optional cancel
 
 ## Quick Start
 

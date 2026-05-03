@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import subprocess
 import time
 from pathlib import Path
 from typing import Literal
@@ -24,7 +25,16 @@ from app.providers import (
     extract_google_oauth_client_credentials,
     is_google_service_account_json,
 )
-from app.sync_jobs import registry, start_copy_job
+from app.sync_jobs import (
+    get_manifests_dir,
+    list_resumable_manifests,
+    read_manifest_providers,
+    read_manifest_summary,
+    registry,
+    request_verify_cancel,
+    resume_copy_job,
+    start_copy_job,
+)
 
 app = FastAPI(title="StorageMan")
 
@@ -67,6 +77,10 @@ class StartCopyRequest(BaseModel):
     source_parent_id: str | None = None
     destination_parent_id: str | None = None
     selections: list[CopyItem]
+
+
+class ResumeCopyRequest(BaseModel):
+    job_id: str
 
 
 class GoogleOAuthStartRequest(ConfigPayload):
@@ -134,6 +148,27 @@ def set_config(payload: ConfigPayload) -> dict:
     }
     save_config(config)
     return {"ok": True}
+
+
+@app.post("/api/jobs/open-manifests")
+def open_manifests_folder() -> dict:
+    path = get_manifests_dir()
+    try:
+        if os.name == "nt":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif os.uname().sysname == "Darwin":
+            subprocess.Popen(["open", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=f"Failed to open manifests folder: {ex}") from ex
+
+    return {"ok": True, "path": str(path)}
+
+
+@app.get("/api/copy/resumable")
+def get_resumable_jobs() -> dict:
+    return {"jobs": list_resumable_manifests()}
 
 
 @app.post("/api/google/oauth/start")
@@ -330,6 +365,8 @@ def start_copy(payload: StartCopyRequest) -> dict:
     state = start_copy_job(
         source=source,
         destination=destination,
+        source_provider=payload.source_provider,
+        destination_provider=payload.destination_provider,
         source_parent_id=payload.source_parent_id,
         destination_parent_id=payload.destination_parent_id,
         selections=selections,
@@ -338,8 +375,32 @@ def start_copy(payload: StartCopyRequest) -> dict:
     return {"job_id": state.id}
 
 
+@app.post("/api/copy/resume")
+def resume_copy(payload: ResumeCopyRequest) -> dict:
+    config = load_config()
+    try:
+        summary = read_manifest_summary(payload.job_id)
+        source_provider_name, destination_provider_name = read_manifest_providers(payload.job_id)
+    except ProviderError as ex:
+        raise HTTPException(status_code=404, detail=str(ex)) from ex
+
+    try:
+        source_provider = build_provider(source_provider_name, config)
+        destination_provider = build_provider(destination_provider_name, config)
+        state = resume_copy_job(source=source_provider, destination=destination_provider, job_id=payload.job_id)
+    except ProviderError as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=str(ex)) from ex
+
+    return {"job_id": state.id, "resumed_from": payload.job_id, "summary": summary}
+
+
 @app.post("/api/copy/{job_id}/cancel")
 def cancel_copy(job_id: str) -> dict:
+    if request_verify_cancel(job_id):
+        return {"ok": True, "verify_cancel": True}
+
     cancelled = registry.cancel(job_id)
     if not cancelled:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -372,6 +433,15 @@ def copy_status(job_id: str) -> dict:
         "cancel_requested": job.cancel_requested,
         "worker_count": job.worker_count,
         "thread_activity": thread_activity,
+        "verify_status": job.verify_status,
+        "verify_total": job.verify_total,
+        "verify_completed": job.verify_completed,
+        "verify_missing": job.verify_missing,
+        "verify_cancel_requested": job.verify_cancel_requested,
+        "resumable_job_id": job.resumable_job_id,
+        "manifest_path": job.manifest_path,
+        "pending_files": job.pending_files,
+        "copied_files": job.copied_files,
         "percentage": percentage,
     }
 

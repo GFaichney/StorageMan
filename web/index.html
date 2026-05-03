@@ -25,6 +25,18 @@
         <button id="open-config" class="btn btn-outline">Config</button>
       </header>
 
+      <section id="resume-banner" class="resume-banner" hidden>
+        <div class="resume-banner-head">
+          <h2>Resumable Copy Jobs Found</h2>
+          <div class="resume-banner-actions">
+            <button id="resume-refresh" class="btn btn-small btn-outline" type="button">Refresh</button>
+            <button id="resume-open-manifests" class="btn btn-small btn-outline" type="button">Open Manifest Folder</button>
+          </div>
+        </div>
+        <p class="resume-banner-text">Select a job to resume from saved manifest state.</p>
+        <div id="resume-jobs-list" class="resume-jobs-list"></div>
+      </section>
+
       <section class="panels">
         <article class="panel" id="source-panel">
           <div class="panel-head">
@@ -124,7 +136,9 @@
           <ul id="thread-activity-list" class="thread-activity-list"></ul>
         </div>
         <div class="progress-actions">
+          <button id="open-manifests" class="btn btn-outline" type="button">Open Manifest Folder</button>
           <button id="cancel-copy" class="btn btn-outline" type="button">Cancel</button>
+          <button id="resume-copy" class="btn btn-accent" type="button" hidden>Resume Failed Copy</button>
         </div>
       </div>
     </dialog>

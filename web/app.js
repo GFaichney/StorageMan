@@ -36,6 +36,10 @@ const ui = {
   copyBtn: document.getElementById("copy-btn"),
   configDialog: document.getElementById("config-dialog"),
   openConfig: document.getElementById("open-config"),
+  resumeBanner: document.getElementById("resume-banner"),
+  resumeJobsList: document.getElementById("resume-jobs-list"),
+  resumeRefresh: document.getElementById("resume-refresh"),
+  resumeOpenManifests: document.getElementById("resume-open-manifests"),
   saveConfig: document.getElementById("save-config"),
   googleOauthStart: document.getElementById("google-oauth-start"),
   configForm: document.getElementById("config-form"),
@@ -45,7 +49,9 @@ const ui = {
   progressBar: document.getElementById("progress-bar"),
   threadActivityWrap: document.getElementById("thread-activity-wrap"),
   threadActivityList: document.getElementById("thread-activity-list"),
+  openManifests: document.getElementById("open-manifests"),
   cancelCopy: document.getElementById("cancel-copy"),
+  resumeCopy: document.getElementById("resume-copy"),
   template: document.getElementById("entry-template"),
   gdServiceAccountJson: document.getElementById("gd-service-account-json"),
   gdClientId: document.getElementById("gd-client-id"),
@@ -56,6 +62,7 @@ const ui = {
 };
 
 let activeJobId = null;
+let resumableJobId = null;
 
 function setProgressState(kind, text) {
   ui.progressState.className = `progress-state ${kind}`;
@@ -285,8 +292,76 @@ async function startCopy() {
   ui.threadActivityList.innerHTML = "";
   ui.cancelCopy.disabled = false;
   ui.cancelCopy.textContent = "Cancel";
+  ui.resumeCopy.hidden = true;
+  resumableJobId = null;
   ui.progressDialog.showModal();
   pollJob(result.job_id);
+}
+
+function renderResumableJobsBanner(jobs) {
+  if (!Array.isArray(jobs) || jobs.length === 0) {
+    ui.resumeBanner.hidden = true;
+    ui.resumeJobsList.innerHTML = "";
+    return;
+  }
+
+  ui.resumeBanner.hidden = false;
+  ui.resumeJobsList.innerHTML = "";
+
+  for (const job of jobs) {
+    const row = document.createElement("div");
+    row.className = "resume-job-row";
+
+    const text = document.createElement("div");
+    const title = document.createElement("div");
+    title.textContent = `Job ${job.job_id}`;
+    const meta = document.createElement("div");
+    meta.className = "resume-job-meta";
+    meta.textContent = `status=${job.status} pending=${job.pending_files} verify=${job.verify_status} src=${job.source_provider} dst=${job.destination_provider}`;
+    text.appendChild(title);
+    text.appendChild(meta);
+
+    const button = document.createElement("button");
+    button.className = "btn btn-small btn-accent";
+    button.type = "button";
+    button.textContent = "Resume";
+    button.addEventListener("click", () => {
+      resumeCopy(job.job_id).catch((err) => showError(err.message));
+    });
+
+    row.appendChild(text);
+    row.appendChild(button);
+    ui.resumeJobsList.appendChild(row);
+  }
+}
+
+async function checkResumableJobsOnStartup() {
+  const result = await api("/api/copy/resumable");
+  const jobs = Array.isArray(result.jobs) ? result.jobs : [];
+  renderResumableJobsBanner(jobs);
+}
+
+async function resumeCopy(jobId = null) {
+  const targetJobId = jobId || resumableJobId;
+  if (!targetJobId) {
+    return;
+  }
+
+  const result = await api("/api/copy/resume", {
+    method: "POST",
+    body: JSON.stringify({ job_id: targetJobId }),
+  });
+
+  activeJobId = result.job_id;
+  resumableJobId = null;
+  ui.resumeCopy.hidden = true;
+  ui.cancelCopy.disabled = false;
+  ui.cancelCopy.textContent = "Cancel";
+  setProgressState("running", "Running");
+  ui.progressText.textContent = "Resumed copy started";
+  ui.progressDialog.showModal();
+  pollJob(result.job_id);
+  await checkResumableJobsOnStartup();
 }
 
 async function cancelCopy() {
@@ -301,15 +376,23 @@ async function cancelCopy() {
   });
 }
 
+async function openManifestFolder() {
+  await api("/api/jobs/open-manifests", { method: "POST" });
+}
+
 async function pollJob(jobId) {
   const timer = setInterval(async () => {
     try {
       const status = await api(`/api/copy/${encodeURIComponent(jobId)}`);
       ui.progressBar.style.width = `${status.percentage}%`;
       renderThreadActivity(status);
-      ui.progressText.textContent = `${status.status.toUpperCase()} - ${status.completed_items}/${status.total_items} ${
-        status.current_item ? `| ${status.current_item}` : ""
-      }`;
+      if (status.status === "verifying") {
+        ui.progressText.textContent = `VERIFYING - ${status.verify_completed}/${status.verify_total}`;
+      } else {
+        ui.progressText.textContent = `${status.status.toUpperCase()} - ${status.completed_items}/${status.total_items} ${
+          status.current_item ? `| ${status.current_item}` : ""
+        }`;
+      }
 
       if (status.status === "cancelled") {
         setProgressState("cancelled", "Cancelled");
@@ -323,14 +406,27 @@ async function pollJob(jobId) {
         setProgressState("running", "Running");
       }
 
+      if (status.status === "verifying") {
+        ui.cancelCopy.disabled = false;
+        ui.cancelCopy.textContent = "Cancel Verify";
+      } else if (status.status === "running") {
+        ui.cancelCopy.textContent = "Cancel";
+      }
+
+      if (status.status === "failed" && status.resumable_job_id) {
+        resumableJobId = status.resumable_job_id;
+        ui.resumeCopy.hidden = false;
+      }
+
       if (status.status === "completed" || status.status === "failed") {
         activeJobId = null;
-        ui.cancelCopy.disabled = true;
+        ui.cancelCopy.disabled = status.status !== "failed";
         clearInterval(timer);
-        setTimeout(() => ui.progressDialog.close(), 500);
         if (status.status === "failed") {
           showError(status.error || "Copy failed");
+          return;
         }
+        setTimeout(() => ui.progressDialog.close(), 500);
         state.source.selected.clear();
         await loadPane("source");
         await loadPane("destination");
@@ -438,7 +534,17 @@ function wireEvents() {
   });
 
   ui.saveConfig.addEventListener("click", saveConfig);
+  ui.resumeRefresh.addEventListener("click", () =>
+    checkResumableJobsOnStartup().catch((err) => showError(err.message))
+  );
+  ui.resumeOpenManifests.addEventListener("click", () =>
+    openManifestFolder().catch((err) => showError(err.message))
+  );
+  ui.openManifests.addEventListener("click", () =>
+    openManifestFolder().catch((err) => showError(err.message))
+  );
   ui.cancelCopy.addEventListener("click", () => cancelCopy().catch((err) => showError(err.message)));
+  ui.resumeCopy.addEventListener("click", () => resumeCopy().catch((err) => showError(err.message)));
   ui.googleOauthStart.addEventListener("click", () =>
     startGoogleOAuth().catch((err) => showError(err.message))
   );
@@ -454,6 +560,7 @@ async function init() {
   wireEvents();
   await loadPane("source");
   await loadPane("destination");
+  await checkResumableJobsOnStartup();
 }
 
 init().catch((err) => showError(err.message));

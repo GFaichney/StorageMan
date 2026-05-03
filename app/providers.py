@@ -66,6 +66,10 @@ def is_google_service_account_json(credentials_json: str) -> bool:
 class StorageProvider:
     provider_type: ProviderType
 
+    def iter_entries(self, parent_id: str | None):
+        for entry in self.list_entries(parent_id):
+            yield entry
+
     def list_entries(self, parent_id: str | None) -> list[Entry]:
         raise NotImplementedError
 
@@ -96,23 +100,23 @@ class LocalProvider(StorageProvider):
             raise ProviderError(f"Local folder not found: {p}")
         return p
 
-    def list_entries(self, parent_id: str | None) -> list[Entry]:
+    def iter_entries(self, parent_id: str | None):
         parent = self._resolve_parent(parent_id)
-        entries: list[Entry] = []
         try:
             for child in parent.iterdir():
                 is_folder = child.is_dir()
                 size = None if is_folder else child.stat().st_size
-                entries.append(
-                    Entry(
-                        id=str(child.resolve()),
-                        name=child.name,
-                        is_folder=is_folder,
-                        size=size,
-                    )
+                yield Entry(
+                    id=str(child.resolve()),
+                    name=child.name,
+                    is_folder=is_folder,
+                    size=size,
                 )
         except PermissionError as ex:
             raise ProviderError(f"Permission denied: {parent}") from ex
+
+    def list_entries(self, parent_id: str | None) -> list[Entry]:
+        entries = list(self.iter_entries(parent_id))
         return sorted(entries, key=lambda e: (not e.is_folder, e.name.lower()))
 
     def create_folder(self, parent_id: str | None, name: str) -> Entry:
@@ -166,26 +170,35 @@ class DropboxProvider(StorageProvider):
             return f"/{name}"
         return f"{parent.rstrip('/')}/{name}"
 
-    def list_entries(self, parent_id: str | None) -> list[Entry]:
+    def iter_entries(self, parent_id: str | None):
         folder = self._normalize_path(parent_id)
         try:
             result = self.client.files_list_folder(path=folder)
         except ApiError as ex:
             raise ProviderError(f"Failed to list Dropbox folder: {ex}") from ex
 
-        items: list[Entry] = []
-        for item in result.entries:
-            if isinstance(item, FolderMetadata):
-                items.append(Entry(id=item.path_lower or item.path_display or "", name=item.name, is_folder=True))
-            elif isinstance(item, FileMetadata):
-                items.append(
-                    Entry(
+        while True:
+            for item in result.entries:
+                if isinstance(item, FolderMetadata):
+                    yield Entry(id=item.path_lower or item.path_display or "", name=item.name, is_folder=True)
+                elif isinstance(item, FileMetadata):
+                    yield Entry(
                         id=item.path_lower or item.path_display or "",
                         name=item.name,
                         is_folder=False,
                         size=item.size,
                     )
-                )
+
+            if not result.has_more:
+                break
+
+            try:
+                result = self.client.files_list_folder_continue(result.cursor)
+            except ApiError as ex:
+                raise ProviderError(f"Failed to continue Dropbox folder listing: {ex}") from ex
+
+    def list_entries(self, parent_id: str | None) -> list[Entry]:
+        items = list(self.iter_entries(parent_id))
         return sorted(items, key=lambda e: (not e.is_folder, e.name.lower()))
 
     def create_folder(self, parent_id: str | None, name: str) -> Entry:
@@ -291,35 +304,44 @@ class GoogleDriveProvider(StorageProvider):
     def _parent(self, parent_id: str | None) -> str:
         return parent_id or "root"
 
-    def list_entries(self, parent_id: str | None) -> list[Entry]:
+    def iter_entries(self, parent_id: str | None):
         parent = self._parent(parent_id)
         query = f"'{parent}' in parents and trashed=false"
-        try:
-            with self._api_lock:
-                result = (
-                    self.service.files()
-                    .list(
-                        q=query,
-                        fields="files(id,name,mimeType,size)",
-                        pageSize=1000,
-                        supportsAllDrives=True,
-                        includeItemsFromAllDrives=True,
+        page_token = None
+        while True:
+            try:
+                with self._api_lock:
+                    result = (
+                        self.service.files()
+                        .list(
+                            q=query,
+                            fields="nextPageToken,files(id,name,mimeType,size)",
+                            pageSize=1000,
+                            pageToken=page_token,
+                            supportsAllDrives=True,
+                            includeItemsFromAllDrives=True,
+                        )
+                        .execute()
                     )
-                    .execute()
-                )
-        except HttpError as ex:
-            raise ProviderError(f"Failed to list Google Drive folder: {ex}") from ex
+            except HttpError as ex:
+                raise ProviderError(f"Failed to list Google Drive folder: {ex}") from ex
 
-        entries: list[Entry] = []
-        for f in result.get("files", []):
-            is_folder = f.get("mimeType") == "application/vnd.google-apps.folder"
-            size = None
-            if not is_folder and "size" in f:
-                try:
-                    size = int(f["size"])
-                except (TypeError, ValueError):
-                    size = None
-            entries.append(Entry(id=f["id"], name=f["name"], is_folder=is_folder, size=size))
+            for f in result.get("files", []):
+                is_folder = f.get("mimeType") == "application/vnd.google-apps.folder"
+                size = None
+                if not is_folder and "size" in f:
+                    try:
+                        size = int(f["size"])
+                    except (TypeError, ValueError):
+                        size = None
+                yield Entry(id=f["id"], name=f["name"], is_folder=is_folder, size=size)
+
+            page_token = result.get("nextPageToken")
+            if not page_token:
+                break
+
+    def list_entries(self, parent_id: str | None) -> list[Entry]:
+        entries = list(self.iter_entries(parent_id))
         return sorted(entries, key=lambda e: (not e.is_folder, e.name.lower()))
 
     def create_folder(self, parent_id: str | None, name: str) -> Entry:

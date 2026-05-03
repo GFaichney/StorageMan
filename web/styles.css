@@ -80,6 +80,55 @@ body {
   margin-bottom: 18px;
 }
 
+.resume-banner {
+  margin-bottom: 12px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 12px;
+}
+
+.resume-banner-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.resume-banner-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.resume-banner-text {
+  margin: 6px 0 10px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.resume-jobs-list {
+  display: grid;
+  gap: 8px;
+}
+
+.resume-job-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.resume-job-meta {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .kicker {
   margin: 0;
   font-size: 0.8rem;
@@ -296,6 +345,7 @@ textarea {
 .progress-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 .thread-activity-wrap {
