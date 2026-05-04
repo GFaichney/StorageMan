@@ -14,6 +14,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "refresh_token": "",
     },
     "dropbox": {
+        "app_key": "",
+        "app_secret": "",
+        "refresh_token": "",
         "access_token": "",
     },
     "sync": {

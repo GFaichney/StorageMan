@@ -5,9 +5,10 @@ import secrets
 import subprocess
 import time
 from pathlib import Path
-from typing import Literal
+from urllib.parse import urlencode
 
 import uvicorn
+import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,11 +18,14 @@ from pydantic import BaseModel, Field
 from app.config_store import load_config, save_config
 from app.models import CopySelection, ProviderType
 from app.providers import (
+    DROPBOX_AUTH_URI,
+    DROPBOX_TOKEN_URI,
     GOOGLE_AUTH_URI,
     GOOGLE_SCOPES,
     GOOGLE_TOKEN_URI,
     ProviderError,
     build_provider,
+    extract_dropbox_oauth_app_credentials,
     extract_google_oauth_client_credentials,
     is_google_service_account_json,
 )
@@ -41,6 +45,7 @@ app = FastAPI(title="StorageMan")
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 GOOGLE_OAUTH_SESSIONS: dict[str, dict] = {}
+DROPBOX_OAUTH_SESSIONS: dict[str, dict] = {}
 
 
 class ConfigPayload(BaseModel):
@@ -48,6 +53,10 @@ class ConfigPayload(BaseModel):
     google_drive_client_id: str = ""
     google_drive_client_secret: str = ""
     google_drive_refresh_token: str = ""
+    dropbox_app_credentials_json: str = ""
+    dropbox_app_key: str = ""
+    dropbox_app_secret: str = ""
+    dropbox_refresh_token: str = ""
     dropbox_access_token: str = ""
     max_transfer_threads: int = Field(default=5, ge=1, le=64)
 
@@ -87,6 +96,10 @@ class GoogleOAuthStartRequest(ConfigPayload):
     pass
 
 
+class DropboxOAuthStartRequest(ConfigPayload):
+    pass
+
+
 def _build_google_oauth_client_config(client_id: str, client_secret: str, redirect_uri: str) -> dict:
     return {
         "installed": {
@@ -106,10 +119,45 @@ def _cleanup_google_oauth_sessions() -> None:
         GOOGLE_OAUTH_SESSIONS.pop(key, None)
 
 
+def _cleanup_dropbox_oauth_sessions() -> None:
+    cutoff = time.time() - 900
+    expired = [key for key, value in DROPBOX_OAUTH_SESSIONS.items() if value.get("created_at", 0) < cutoff]
+    for key in expired:
+        DROPBOX_OAUTH_SESSIONS.pop(key, None)
+
+
 def _allow_insecure_google_oauth_for_localhost(base_url: str) -> None:
     # OAuthlib enforces HTTPS by default; localhost desktop flows commonly use HTTP callbacks.
     if base_url.startswith("http://127.0.0.1") or base_url.startswith("http://localhost"):
         os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
+
+def _save_config_payload(payload: dict) -> None:
+    max_threads = payload.get("max_transfer_threads", 5)
+    try:
+        max_threads = int(max_threads)
+    except (TypeError, ValueError):
+        max_threads = 5
+    max_threads = max(1, min(max_threads, 64))
+
+    config = {
+        "google_drive": {
+            "service_account_json": payload.get("google_drive_service_account_json", "").strip(),
+            "client_id": payload.get("google_drive_client_id", "").strip(),
+            "client_secret": payload.get("google_drive_client_secret", "").strip(),
+            "refresh_token": payload.get("google_drive_refresh_token", "").strip(),
+        },
+        "dropbox": {
+            "app_key": payload.get("dropbox_app_key", "").strip(),
+            "app_secret": payload.get("dropbox_app_secret", "").strip(),
+            "refresh_token": payload.get("dropbox_refresh_token", "").strip(),
+            "access_token": payload.get("dropbox_access_token", "").strip(),
+        },
+        "sync": {
+            "max_threads": max_threads,
+        },
+    }
+    save_config(config)
 
 
 @app.get("/")
@@ -125,6 +173,10 @@ def get_config() -> dict:
         "google_drive_client_id": config["google_drive"].get("client_id", ""),
         "google_drive_client_secret": config["google_drive"].get("client_secret", ""),
         "google_drive_refresh_token": config["google_drive"].get("refresh_token", ""),
+        "dropbox_app_credentials_json": "",
+        "dropbox_app_key": config["dropbox"].get("app_key", ""),
+        "dropbox_app_secret": config["dropbox"].get("app_secret", ""),
+        "dropbox_refresh_token": config["dropbox"].get("refresh_token", ""),
         "dropbox_access_token": config["dropbox"].get("access_token", ""),
         "max_transfer_threads": config.get("sync", {}).get("max_threads", 5),
     }
@@ -132,21 +184,22 @@ def get_config() -> dict:
 
 @app.post("/api/config")
 def set_config(payload: ConfigPayload) -> dict:
-    config = {
-        "google_drive": {
-            "service_account_json": payload.google_drive_service_account_json.strip(),
-            "client_id": payload.google_drive_client_id.strip(),
-            "client_secret": payload.google_drive_client_secret.strip(),
-            "refresh_token": payload.google_drive_refresh_token.strip(),
-        },
-        "dropbox": {
-            "access_token": payload.dropbox_access_token.strip(),
-        },
-        "sync": {
-            "max_threads": payload.max_transfer_threads,
-        },
-    }
-    save_config(config)
+    try:
+        dropbox_app_key, dropbox_app_secret = extract_dropbox_oauth_app_credentials(
+            payload.dropbox_app_credentials_json,
+            payload.dropbox_app_key,
+            payload.dropbox_app_secret,
+        )
+    except ProviderError as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+
+    _save_config_payload(
+        {
+            **payload.model_dump(),
+            "dropbox_app_key": dropbox_app_key,
+            "dropbox_app_secret": dropbox_app_secret,
+        }
+    )
     return {"ok": True}
 
 
@@ -222,6 +275,48 @@ def start_google_oauth(payload: GoogleOAuthStartRequest, request: Request) -> di
     return {"authorization_url": authorization_url}
 
 
+@app.post("/api/dropbox/oauth/start")
+def start_dropbox_oauth(payload: DropboxOAuthStartRequest, request: Request) -> dict:
+    _cleanup_dropbox_oauth_sessions()
+
+    try:
+        app_key, app_secret = extract_dropbox_oauth_app_credentials(
+            payload.dropbox_app_credentials_json,
+            payload.dropbox_app_key,
+            payload.dropbox_app_secret,
+        )
+    except ProviderError as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+
+    if not app_key or not app_secret:
+        raise HTTPException(
+            status_code=400,
+            detail="Dropbox OAuth requires app credentials JSON or both app key and app secret.",
+        )
+
+    redirect_uri = f"{str(request.base_url).rstrip('/')}/api/dropbox/oauth/callback"
+    state = secrets.token_urlsafe(24)
+    query = urlencode(
+        {
+            "client_id": app_key,
+            "response_type": "code",
+            "token_access_type": "offline",
+            "redirect_uri": redirect_uri,
+            "state": state,
+        }
+    )
+    authorization_url = f"{DROPBOX_AUTH_URI}?{query}"
+
+    DROPBOX_OAUTH_SESSIONS[state] = {
+        "created_at": time.time(),
+        "redirect_uri": redirect_uri,
+        "payload": payload.model_dump(),
+        "app_key": app_key,
+        "app_secret": app_secret,
+    }
+    return {"authorization_url": authorization_url}
+
+
 @app.get("/api/google/oauth/callback")
 def google_oauth_callback(request: Request, state: str | None = None, error: str | None = None) -> HTMLResponse:
     if error:
@@ -269,19 +364,14 @@ def google_oauth_callback(request: Request, state: str | None = None, error: str
             status_code=400,
         )
 
-    pending = session["payload"]
-    config = {
-        "google_drive": {
-            "service_account_json": pending.get("google_drive_service_account_json", "").strip(),
-            "client_id": session["client_id"],
-            "client_secret": session["client_secret"],
-            "refresh_token": refresh_token,
-        },
-        "dropbox": {
-            "access_token": pending.get("dropbox_access_token", "").strip(),
-        },
-    }
-    save_config(config)
+    _save_config_payload(
+        {
+            **session["payload"],
+            "google_drive_client_id": session["client_id"],
+            "google_drive_client_secret": session["client_secret"],
+            "google_drive_refresh_token": refresh_token,
+        }
+    )
 
     return HTMLResponse(
         """
@@ -289,6 +379,93 @@ def google_oauth_callback(request: Request, state: str | None = None, error: str
           <body style=\"font-family: sans-serif; padding: 24px;\">
             <h1>Google Drive connected</h1>
             <p>The refresh token has been saved to config.json. You can close this window and return to StorageMan.</p>
+            <script>
+              setTimeout(() => window.close(), 1200);
+            </script>
+          </body>
+        </html>
+        """
+    )
+
+
+@app.get("/api/dropbox/oauth/callback")
+def dropbox_oauth_callback(state: str | None = None, code: str | None = None, error: str | None = None) -> HTMLResponse:
+    if error:
+        return HTMLResponse(
+            f"<html><body><h1>Dropbox authorization failed</h1><p>{error}</p></body></html>",
+            status_code=400,
+        )
+
+    if not state:
+        return HTMLResponse(
+            "<html><body><h1>Dropbox authorization failed</h1><p>Missing OAuth state.</p></body></html>",
+            status_code=400,
+        )
+
+    session = DROPBOX_OAUTH_SESSIONS.pop(state, None)
+    if not session:
+        return HTMLResponse(
+            "<html><body><h1>Dropbox authorization failed</h1><p>OAuth session expired or is invalid.</p></body></html>",
+            status_code=400,
+        )
+
+    if not code:
+        return HTMLResponse(
+            "<html><body><h1>Dropbox authorization failed</h1><p>Missing authorization code.</p></body></html>",
+            status_code=400,
+        )
+
+    try:
+        token_response = requests.post(
+            DROPBOX_TOKEN_URI,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": session["app_key"],
+                "client_secret": session["app_secret"],
+                "redirect_uri": session["redirect_uri"],
+            },
+            timeout=20,
+        )
+    except requests.RequestException as ex:
+        return HTMLResponse(
+            f"<html><body><h1>Dropbox authorization failed</h1><p>{str(ex)}</p></body></html>",
+            status_code=400,
+        )
+
+    if not token_response.ok:
+        detail = token_response.text
+        return HTMLResponse(
+            f"<html><body><h1>Dropbox authorization failed</h1><p>{detail}</p></body></html>",
+            status_code=400,
+        )
+
+    token_payload = token_response.json()
+    refresh_token = (token_payload.get("refresh_token") or "").strip()
+    access_token = (token_payload.get("access_token") or "").strip()
+
+    if not refresh_token:
+        return HTMLResponse(
+            "<html><body><h1>Dropbox authorization incomplete</h1><p>No refresh token was returned. Ensure your Dropbox app supports offline access, then re-run the flow.</p></body></html>",
+            status_code=400,
+        )
+
+    _save_config_payload(
+        {
+            **session["payload"],
+            "dropbox_app_key": session["app_key"],
+            "dropbox_app_secret": session["app_secret"],
+            "dropbox_refresh_token": refresh_token,
+            "dropbox_access_token": access_token,
+        }
+    )
+
+    return HTMLResponse(
+        """
+        <html>
+          <body style=\"font-family: sans-serif; padding: 24px;\">
+            <h1>Dropbox connected</h1>
+            <p>The Dropbox OAuth tokens have been saved to config.json. You can close this window and return to StorageMan.</p>
             <script>
               setTimeout(() => window.close(), 1200);
             </script>

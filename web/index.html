@@ -108,6 +108,25 @@
           Generate Google Refresh Token
         </button>
         <label>
+          Dropbox App Credentials JSON
+          <textarea id="db-app-credentials-json" rows="5" placeholder='Optional. Paste JSON with app_key and app_secret'></textarea>
+        </label>
+        <label>
+          Dropbox App Key
+          <input type="text" id="db-app-key" />
+        </label>
+        <label>
+          Dropbox App Secret
+          <input type="password" id="db-app-secret" />
+        </label>
+        <label>
+          Dropbox Refresh Token
+          <input type="password" id="db-refresh-token" />
+        </label>
+        <button type="button" id="dropbox-oauth-start" class="btn btn-small btn-outline">
+          Connect Dropbox (OAuth)
+        </button>
+        <label>
           Dropbox Access Token
           <input type="password" id="db-access-token" />
         </label>

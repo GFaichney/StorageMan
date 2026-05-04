@@ -26,9 +26,14 @@ A GUI tool that allows the user to synchronise between cloud storage providers a
 
 ### Config Dialog
 
-- Allows the user to enter API keys for storage providers:
+- Allows the user to enter API credentials for storage providers:
   - Google Drive
   - Dropbox
+- Includes a built-in Dropbox OAuth connect flow:
+  - User can provide Dropbox app credentials (app key/app secret, or JSON containing them)
+  - User can click Connect Dropbox to complete OAuth consent
+  - The app saves Dropbox refresh token automatically after callback
+  - Legacy Dropbox access token entry remains available for backward compatibility
 - All config saved to disk
 - All config loaded from disk when the application starts
 - Maximum number of concurrent threads allowed for file transfer opeartions. Defaults to 5.

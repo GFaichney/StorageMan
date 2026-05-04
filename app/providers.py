@@ -22,6 +22,8 @@ from app.models import Entry, FileContent, ProviderType
 GOOGLE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+DROPBOX_AUTH_URI = "https://www.dropbox.com/oauth2/authorize"
+DROPBOX_TOKEN_URI = "https://api.dropboxapi.com/oauth2/token"
 
 
 class ProviderError(RuntimeError):
@@ -61,6 +63,25 @@ def is_google_service_account_json(credentials_json: str) -> bool:
         raise ProviderError("Google credentials JSON is invalid") from ex
 
     return info.get("type") == "service_account"
+
+
+def extract_dropbox_oauth_app_credentials(
+    credentials_json: str,
+    app_key: str = "",
+    app_secret: str = "",
+) -> tuple[str, str]:
+    if not credentials_json.strip():
+        return app_key.strip(), app_secret.strip()
+
+    try:
+        info = json.loads(credentials_json)
+    except json.JSONDecodeError as ex:
+        raise ProviderError("Dropbox credentials JSON is invalid") from ex
+
+    return (
+        str(info.get("app_key", app_key)).strip(),
+        str(info.get("app_secret", app_secret)).strip(),
+    )
 
 
 class StorageProvider:
@@ -153,9 +174,24 @@ class LocalProvider(StorageProvider):
 class DropboxProvider(StorageProvider):
     provider_type: ProviderType = "dropbox"
 
-    def __init__(self, access_token: str) -> None:
+    def __init__(self, access_token: str, app_key: str = "", app_secret: str = "", refresh_token: str = "") -> None:
+        access_token = access_token.strip()
+        app_key = app_key.strip()
+        app_secret = app_secret.strip()
+        refresh_token = refresh_token.strip()
+
+        if refresh_token:
+            if not app_key or not app_secret:
+                raise ProviderError("Dropbox refresh token requires app key and app secret")
+            self.client = dropbox.Dropbox(
+                oauth2_refresh_token=refresh_token,
+                app_key=app_key,
+                app_secret=app_secret,
+            )
+            return
+
         if not access_token:
-            raise ProviderError("Dropbox access token is missing")
+            raise ProviderError("Dropbox OAuth is not configured. Connect Dropbox in Config.")
         self.client = dropbox.Dropbox(access_token)
 
     def _normalize_path(self, parent_id: str | None) -> str:
@@ -415,7 +451,13 @@ def build_provider(provider: ProviderType, config: dict) -> StorageProvider:
     if provider == "local":
         return LocalProvider()
     if provider == "dropbox":
-        return DropboxProvider(config.get("dropbox", {}).get("access_token", ""))
+        db = config.get("dropbox", {})
+        return DropboxProvider(
+            access_token=db.get("access_token", ""),
+            app_key=db.get("app_key", ""),
+            app_secret=db.get("app_secret", ""),
+            refresh_token=db.get("refresh_token", ""),
+        )
     if provider == "gdrive":
         gd = config.get("google_drive", {})
         return GoogleDriveProvider(

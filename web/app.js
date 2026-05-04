@@ -42,6 +42,7 @@ const ui = {
   resumeOpenManifests: document.getElementById("resume-open-manifests"),
   saveConfig: document.getElementById("save-config"),
   googleOauthStart: document.getElementById("google-oauth-start"),
+  dropboxOauthStart: document.getElementById("dropbox-oauth-start"),
   configForm: document.getElementById("config-form"),
   progressDialog: document.getElementById("progress-dialog"),
   progressState: document.getElementById("progress-state"),
@@ -57,6 +58,10 @@ const ui = {
   gdClientId: document.getElementById("gd-client-id"),
   gdClientSecret: document.getElementById("gd-client-secret"),
   gdRefreshToken: document.getElementById("gd-refresh-token"),
+  dbAppCredentialsJson: document.getElementById("db-app-credentials-json"),
+  dbAppKey: document.getElementById("db-app-key"),
+  dbAppSecret: document.getElementById("db-app-secret"),
+  dbRefreshToken: document.getElementById("db-refresh-token"),
   dbAccessToken: document.getElementById("db-access-token"),
   maxTransferThreads: document.getElementById("max-transfer-threads"),
 };
@@ -455,6 +460,10 @@ async function loadConfig() {
   ui.gdClientId.value = cfg.google_drive_client_id || "";
   ui.gdClientSecret.value = cfg.google_drive_client_secret || "";
   ui.gdRefreshToken.value = cfg.google_drive_refresh_token || "";
+  ui.dbAppCredentialsJson.value = cfg.dropbox_app_credentials_json || "";
+  ui.dbAppKey.value = cfg.dropbox_app_key || "";
+  ui.dbAppSecret.value = cfg.dropbox_app_secret || "";
+  ui.dbRefreshToken.value = cfg.dropbox_refresh_token || "";
   ui.dbAccessToken.value = cfg.dropbox_access_token || "";
   ui.maxTransferThreads.value = cfg.max_transfer_threads || 5;
 }
@@ -469,6 +478,10 @@ async function saveConfig(event) {
       google_drive_client_id: ui.gdClientId.value,
       google_drive_client_secret: ui.gdClientSecret.value,
       google_drive_refresh_token: ui.gdRefreshToken.value,
+      dropbox_app_credentials_json: ui.dbAppCredentialsJson.value,
+      dropbox_app_key: ui.dbAppKey.value,
+      dropbox_app_secret: ui.dbAppSecret.value,
+      dropbox_refresh_token: ui.dbRefreshToken.value,
       dropbox_access_token: ui.dbAccessToken.value,
       max_transfer_threads: Number(ui.maxTransferThreads.value || 5),
     }),
@@ -483,7 +496,12 @@ async function startGoogleOAuth() {
     google_drive_client_id: ui.gdClientId.value,
     google_drive_client_secret: ui.gdClientSecret.value,
     google_drive_refresh_token: ui.gdRefreshToken.value,
+    dropbox_app_credentials_json: ui.dbAppCredentialsJson.value,
+    dropbox_app_key: ui.dbAppKey.value,
+    dropbox_app_secret: ui.dbAppSecret.value,
+    dropbox_refresh_token: ui.dbRefreshToken.value,
     dropbox_access_token: ui.dbAccessToken.value,
+    max_transfer_threads: Number(ui.maxTransferThreads.value || 5),
   };
 
   const result = await api("/api/google/oauth/start", {
@@ -504,6 +522,41 @@ async function startGoogleOAuth() {
     clearInterval(timer);
     await loadConfig();
     window.alert("Google OAuth finished. The refresh token has been loaded into the form.");
+  }, 800);
+}
+
+async function startDropboxOAuth() {
+  const payload = {
+    google_drive_service_account_json: ui.gdServiceAccountJson.value,
+    google_drive_client_id: ui.gdClientId.value,
+    google_drive_client_secret: ui.gdClientSecret.value,
+    google_drive_refresh_token: ui.gdRefreshToken.value,
+    dropbox_app_credentials_json: ui.dbAppCredentialsJson.value,
+    dropbox_app_key: ui.dbAppKey.value,
+    dropbox_app_secret: ui.dbAppSecret.value,
+    dropbox_refresh_token: ui.dbRefreshToken.value,
+    dropbox_access_token: ui.dbAccessToken.value,
+    max_transfer_threads: Number(ui.maxTransferThreads.value || 5),
+  };
+
+  const result = await api("/api/dropbox/oauth/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  const popup = window.open(result.authorization_url, "dropbox-oauth", "width=720,height=780");
+  if (!popup) {
+    throw new Error("Popup was blocked. Allow popups for this site and try again.");
+  }
+
+  const timer = setInterval(async () => {
+    if (!popup.closed) {
+      return;
+    }
+
+    clearInterval(timer);
+    await loadConfig();
+    window.alert("Dropbox OAuth finished. Tokens have been loaded into the form.");
   }, 800);
 }
 
@@ -547,6 +600,9 @@ function wireEvents() {
   ui.resumeCopy.addEventListener("click", () => resumeCopy().catch((err) => showError(err.message)));
   ui.googleOauthStart.addEventListener("click", () =>
     startGoogleOAuth().catch((err) => showError(err.message))
+  );
+  ui.dropboxOauthStart.addEventListener("click", () =>
+    startDropboxOAuth().catch((err) => showError(err.message))
   );
 }
 

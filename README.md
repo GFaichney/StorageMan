@@ -44,5 +44,6 @@ These scripts install dependencies and start the app. For Linux/macOS, make the 
 - OAuth desktop credentials are also supported. You can either enter `client_id`, `client_secret`, and `refresh_token` manually, or paste the Google OAuth client JSON and provide only the `refresh_token` separately.
 - The config dialog now includes a built-in `Generate Google Refresh Token` flow. Paste OAuth client JSON or enter client ID and secret, run the flow, complete Google consent, and the app will save the refresh token automatically.
 - File copy operations run concurrently using a configurable max thread count (default: 5).
-- Dropbox uses an access token.
+- Dropbox supports full OAuth from the config dialog. Enter Dropbox app credentials (app key/secret or JSON), click `Connect Dropbox (OAuth)`, complete consent, and the app stores the refresh token automatically.
+- Dropbox access token is still accepted for backward compatibility.
 - Configuration is stored in `config.json` in the project root.
